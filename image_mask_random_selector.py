@@ -21,7 +21,7 @@ class ImageMaskRandomSelector:
     CATEGORY = "ImageMaskSelector"
 
     def select_random(self, input_count, seed, **kwargs):
-        # 使用传入的 seed 确保结果可复现（在同一次运行中）
+        # 使用传入的 seed 确保结果可复现
         random.seed(seed)
         
         valid_indices = []
@@ -32,8 +32,6 @@ class ImageMaskRandomSelector:
                 valid_indices.append(i)
         
         if not valid_indices:
-            # 如果没有连接任何图像，尝试返回一个空的张量或报错
-            # 在 ComfyUI 中，通常至少需要一个输入
             raise ValueError("ImageMaskRandomSelector: No images connected. Please connect at least one image input.")
 
         # 从有效的索引中随机选择一个
@@ -42,17 +40,38 @@ class ImageMaskRandomSelector:
         selected_image = kwargs[f"image_{selected_idx}"]
         selected_mask = kwargs.get(f"mask_{selected_idx}")
 
-        # 处理遮罩：如果对应的遮罩没有连接，则创建一个全黑（无遮罩）的默认遮罩
-        if selected_mask is None:
-            # selected_image 形状通常是 [B, H, W, C]
-            # Mask 形状应为 [B, H, W]
-            B, H, W, C = selected_image.shape
+        # 确保 image 是 tensor
+        if not isinstance(selected_image, torch.Tensor):
+            # 如果不是 tensor，尝试转换或报错
+            try:
+                selected_image = torch.from_numpy(selected_image) if hasattr(selected_image, "numpy") else torch.tensor(selected_image)
+            except:
+                raise TypeError(f"ImageMaskRandomSelector: Selected image_{selected_idx} is not a valid tensor or convertible type.")
+
+        # 强制处理 mask，确保它永远不是 None 且是一个 tensor
+        if selected_mask is None or not isinstance(selected_mask, torch.Tensor):
+            # 获取图像的形状来创建默认遮罩 [B, H, W, C] -> [B, H, W]
+            shape = selected_image.shape
+            B, H, W = shape[0], shape[1], shape[2]
             selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
         else:
-            # 确保 mask 的 batch size 与 image 一致（防止输入不匹配）
+            # 确保 mask 是 3D 的 [B, H, W]
+            if len(selected_mask.shape) == 2:
+                selected_mask = selected_mask.unsqueeze(0)
+            elif len(selected_mask.shape) == 4:
+                # 如果误传入了 4D tensor (比如把 image 当 mask 传了)，取第一个通道
+                selected_mask = selected_mask[:, :, :, 0]
+            
+            # 确保 batch size 与 image 一致
             if selected_mask.shape[0] != selected_image.shape[0]:
-                # 如果 batch 不匹配，可以进行简单的广播或裁剪，这里选择抛出警告或简单处理
-                pass
+                if selected_mask.shape[0] == 1:
+                    # 如果 mask 只有一个 batch，repeat 到 image 的 batch 大小
+                    selected_mask = selected_mask.repeat(selected_image.shape[0], 1, 1)
+                else:
+                    # 如果 batch 不匹配且无法简单 repeat，则根据 image 重新创建一个空 mask
+                    shape = selected_image.shape
+                    B, H, W = shape[0], shape[1], shape[2]
+                    selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
 
         return (selected_image, selected_mask)
 
