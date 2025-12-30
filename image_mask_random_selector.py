@@ -37,42 +37,64 @@ class ImageMaskRandomSelector:
         # 从有效的索引中随机选择一个
         selected_idx = random.choice(valid_indices)
         
-        selected_image = kwargs[f"image_{selected_idx}"]
+        selected_image = kwargs.get(f"image_{selected_idx}")
         selected_mask = kwargs.get(f"mask_{selected_idx}")
 
-        # 确保 image 是 tensor
-        if not isinstance(selected_image, torch.Tensor):
-            # 如果不是 tensor，尝试转换或报错
-            try:
-                selected_image = torch.from_numpy(selected_image) if hasattr(selected_image, "numpy") else torch.tensor(selected_image)
-            except:
-                raise TypeError(f"ImageMaskRandomSelector: Selected image_{selected_idx} is not a valid tensor or convertible type.")
+        print(f"ImageMaskRandomSelector: Selected index {selected_idx}")
 
-        # 强制处理 mask，确保它永远不是 None 且是一个 tensor
-        if selected_mask is None or not isinstance(selected_mask, torch.Tensor):
-            # 获取图像的形状来创建默认遮罩 [B, H, W, C] -> [B, H, W]
-            shape = selected_image.shape
-            B, H, W = shape[0], shape[1], shape[2]
-            selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
-        else:
-            # 确保 mask 是 3D 的 [B, H, W]
-            if len(selected_mask.shape) == 2:
-                selected_mask = selected_mask.unsqueeze(0)
-            elif len(selected_mask.shape) == 4:
-                # 如果误传入了 4D tensor (比如把 image 当 mask 传了)，取第一个通道
-                selected_mask = selected_mask[:, :, :, 0]
+        # 确保 image 是 tensor 且不为 None
+        if selected_image is None or not isinstance(selected_image, torch.Tensor):
+            print(f"ImageMaskRandomSelector: selected_image is {type(selected_image)}, trying to find fallback...")
+            for idx in valid_indices:
+                temp_img = kwargs.get(f"image_{idx}")
+                if temp_img is not None and isinstance(temp_img, torch.Tensor):
+                    selected_image = temp_img
+                    selected_idx = idx
+                    selected_mask = kwargs.get(f"mask_{idx}")
+                    print(f"ImageMaskRandomSelector: Fallback to index {idx}")
+                    break
             
-            # 确保 batch size 与 image 一致
-            if selected_mask.shape[0] != selected_image.shape[0]:
-                if selected_mask.shape[0] == 1:
-                    # 如果 mask 只有一个 batch，repeat 到 image 的 batch 大小
-                    selected_mask = selected_mask.repeat(selected_image.shape[0], 1, 1)
-                else:
-                    # 如果 batch 不匹配且无法简单 repeat，则根据 image 重新创建一个空 mask
-                    shape = selected_image.shape
-                    B, H, W = shape[0], shape[1], shape[2]
-                    selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
+            if selected_image is None or not isinstance(selected_image, torch.Tensor):
+                raise TypeError("ImageMaskRandomSelector: Could not find a valid image tensor.")
 
+        # 彻底确保 mask 永远不是 None
+        if selected_mask is None:
+            print(f"ImageMaskRandomSelector: mask_{selected_idx} is None, creating default zero mask.")
+            # 获取图像的形状来创建默认遮罩 [B, H, W, C] -> [B, H, W]
+            B, H, W = selected_image.shape[0], selected_image.shape[1], selected_image.shape[2]
+            selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
+        elif not isinstance(selected_mask, torch.Tensor):
+            print(f"ImageMaskRandomSelector: mask_{selected_idx} is not a tensor ({type(selected_mask)}), converting or creating default.")
+            try:
+                selected_mask = torch.from_numpy(selected_mask) if hasattr(selected_mask, "numpy") else torch.tensor(selected_mask)
+            except:
+                B, H, W = selected_image.shape[0], selected_image.shape[1], selected_image.shape[2]
+                selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
+
+        # 检查并修复 mask 维度，确保它是 [B, H, W]
+        if hasattr(selected_mask, "dim"):
+            if selected_mask.dim() == 2:
+                selected_mask = selected_mask.unsqueeze(0)
+            elif selected_mask.dim() == 4:
+                # 如果是 [B, H, W, C]，取第一个通道
+                selected_mask = selected_mask[:, :, :, 0]
+        
+        # 确保 batch size 与 image 一致
+        if selected_mask.shape[0] != selected_image.shape[0]:
+            if selected_mask.shape[0] == 1:
+                # 如果 mask 只有一个 batch，repeat 到 image 的 batch 大小
+                selected_mask = selected_mask.repeat(selected_image.shape[0], 1, 1)
+            else:
+                # 如果 batch 不匹配且无法简单 repeat，则根据 image 重新创建一个空 mask
+                B, H, W = selected_image.shape[0], selected_image.shape[1], selected_image.shape[2]
+                selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
+
+        # 最后的终极检查，绝对不允许返回 None
+        if selected_mask is None:
+             B, H, W = selected_image.shape[0], selected_image.shape[1], selected_image.shape[2]
+             selected_mask = torch.zeros((B, H, W), dtype=torch.float32, device=selected_image.device)
+
+        print(f"ImageMaskRandomSelector: Returning IMAGE {selected_image.shape}, MASK {selected_mask.shape}")
         return (selected_image, selected_mask)
 
 NODE_CLASS_MAPPINGS = {
